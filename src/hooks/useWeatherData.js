@@ -13,7 +13,6 @@ function fmtKMA(date) {
   return fmt(date).replace(/-/g, '')
 }
 
-// SKY 코드 → cloudCover (0–10 scale)
 function skyToCloud(skyStr) {
   const v = parseInt(skyStr, 10)
   if (v === 1) return 2  // 맑음
@@ -21,14 +20,11 @@ function skyToCloud(skyStr) {
   return 9               // 흐림 (4)
 }
 
-async function fetchKMA(location, date, apiKey) {
+async function fetchKMA(location, date) {
   const yesterday = new Date(date)
   yesterday.setDate(yesterday.getDate() - 1)
 
-  // serviceKey from data.go.kr is already URL-encoded (contains %2B, %3D, etc.)
-  // Injecting it directly avoids double-encoding (%2B → %252B) that causes 401
-  const keyParam = apiKey.includes('%') ? apiKey : encodeURIComponent(apiKey)
-
+  // serviceKey는 서버(api/kma.js)에서 환경변수로 주입 — 클라이언트에서 전송하지 않음
   const params = new URLSearchParams({
     numOfRows: '1000',
     pageNo: '1',
@@ -39,7 +35,7 @@ async function fetchKMA(location, date, apiKey) {
     ny: String(location.ny),
   })
 
-  const res = await fetch(`/api/kma?serviceKey=${keyParam}&${params}`)
+  const res = await fetch(`/api/kma?${params}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
   const json = await res.json()
@@ -51,7 +47,6 @@ async function fetchKMA(location, date, apiKey) {
   const todayItems = items.filter(it => it.fcstDate === todayStr)
   if (todayItems.length === 0) throw new Error('NO_DATA')
 
-  // Group forecast values by hour and category
   const byHour = {}
   for (const item of todayItems) {
     const hour = parseInt(item.fcstTime.slice(0, 2), 10)
@@ -59,7 +54,6 @@ async function fetchKMA(location, date, apiKey) {
     byHour[hour][item.category] = item.fcstValue
   }
 
-  // Forward-fill 3-hourly values to build full 24-hour array
   let lastSky = '1', lastTmp = '15', lastReh = '50', lastWsd = '0'
   return Array.from({ length: 24 }, (_, hour) => {
     const h = byHour[hour] ?? {}
@@ -128,10 +122,10 @@ async function fetchOpenMeteo(location, date) {
   })
 }
 
-export function useWeatherData(location, date, apiKey) {
-  const [data, setData]           = useState(null)
-  const [loading, setLoading]     = useState(true)
-  const [error, setError]         = useState(null)
+export function useWeatherData(location, date) {
+  const [data, setData]             = useState(null)
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState(null)
   const [dataSource, setDataSource] = useState('openmeteo')
 
   useEffect(() => {
@@ -142,19 +136,18 @@ export function useWeatherData(location, date, apiKey) {
     const isToday = fmt(date) === fmt(new Date())
 
     const run = async () => {
-      // KMA 단기예보: today only (forecast service, no historical data)
-      if (apiKey && isToday) {
+      // 오늘 날짜: KMA 단기예보 우선 시도 (서버 환경변수에 키가 없으면 자동 fallback)
+      if (isToday) {
         try {
-          setData(await fetchKMA(location, date, apiKey))
+          setData(await fetchKMA(location, date))
           setDataSource('kma')
           setLoading(false)
           return
-        } catch (e) {
-          setError(`KMA 오류 (${e.message}) — Open-Meteo로 대체합니다.`)
+        } catch {
+          // 환경변수 미설정(dev) 또는 API 오류 → Open-Meteo로 조용히 전환
         }
       }
 
-      // Open-Meteo fallback
       try {
         setData(await fetchOpenMeteo(location, date))
         setDataSource('openmeteo')
@@ -167,7 +160,7 @@ export function useWeatherData(location, date, apiKey) {
     }
 
     run()
-  }, [location?.stnId, date?.toDateString(), apiKey])
+  }, [location?.stnId, date?.toDateString()])
 
   return { data, loading, error, dataSource }
 }
