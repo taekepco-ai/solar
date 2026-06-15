@@ -6,7 +6,7 @@ export const LOCATIONS = [
   { name: '광주', lat: 35.17, lon: 126.90, stnId: '156' },
   { name: '대전', lat: 36.37, lon: 127.37, stnId: '133' },
   { name: '울산', lat: 35.53, lon: 129.32, stnId: '152' },
-  { name: '창원', lat: 35.17, lon: 128.57, stnId: '155' },
+  { name: '경남', lat: 35.17, lon: 128.57, stnId: '155' },
   { name: '제주', lat: 33.51, lon: 126.52, stnId: '184' },
 ]
 
