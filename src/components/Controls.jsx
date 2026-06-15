@@ -42,10 +42,7 @@ export default function Controls({ location, setLocation, date, setDate }) {
       </div>
 
       <div className="ml-auto text-xs text-slate-500">
-        기상 데이터 제공:
-        <span className="ml-1 text-slate-400">Open-Meteo</span>
-        <span className="mx-1 text-slate-600">·</span>
-        <span className="text-slate-400">API 키 불필요</span>
+        기상 데이터 제공: <span className="text-slate-400">Open-Meteo</span>
       </div>
     </div>
   )
