@@ -1,76 +1,60 @@
 import { useState, useEffect } from 'react'
 import { generateMockData } from '../utils/mockData'
+import { solarElevation } from '../utils/solar'
 
-function toDateStr(date) {
+function fmt(date) {
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, '0')
   const d = String(date.getDate()).padStart(2, '0')
-  return `${y}${m}${d}`
+  return `${y}-${m}-${d}`
 }
 
-async function fetchAsos(stnId, date, apiKey) {
-  const dateStr = toDateStr(date)
-  const rawKey  = apiKey.trim()
+async function fetchOpenMeteo(location, date) {
+  const dateStr = fmt(date)
+  const todayStr = fmt(new Date())
+  const daysAgo = Math.floor((new Date(todayStr) - new Date(dateStr)) / 86400000)
 
-  // URLSearchParams는 %를 %25로 다시 인코딩해 이중 인코딩이 발생함.
-  // 서비스 키만 URL 문자열에 직접 삽입:
-  // - 인코딩 키(%2B, %3D 포함): 그대로 삽입 → 서버가 한 번 디코딩해 올바른 값 수신
-  // - 디코딩 키(+, = 포함): encodeURIComponent로 1회 인코딩 후 삽입
-  const keyForUrl = rawKey.includes('%') ? rawKey : encodeURIComponent(rawKey)
+  // 3일 이상 지난 과거 → archive API / 나머지(오늘·내일·최근) → forecast API
+  const base = daysAgo > 3
+    ? 'https://archive-api.open-meteo.com/v1/archive'
+    : 'https://api.open-meteo.com/v1/forecast'
 
-  const otherParams = new URLSearchParams({
-    numOfRows: 24,
-    pageNo: 1,
-    dataType: 'JSON',
-    dataCd: 'ASOS',
-    dateCd: 'HR',
-    startDt: dateStr,
-    startHh: '00',
-    endDt: dateStr,
-    endHh: '23',
-    stnIds: stnId,
+  const params = new URLSearchParams({
+    latitude:  location.lat,
+    longitude: location.lon,
+    start_date: dateStr,
+    end_date:   dateStr,
+    hourly: 'shortwave_radiation,temperature_2m,cloud_cover,wind_speed_10m,relative_humidity_2m',
+    timezone: 'Asia/Seoul',
   })
 
-  const url = `/api/asos?serviceKey=${keyForUrl}&${otherParams}`
-  console.log('[ASOS] →', url.replace(/serviceKey=[^&]+/, 'serviceKey=***'))
+  const res = await fetch(`${base}?${params}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
-  const res = await fetch(url)
-  const body = await res.text()
+  const json = await res.json()
+  const h = json.hourly
 
-  if (!res.ok) {
-    // XML 형식: <returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR</returnAuthMsg>
-    const xmlCode = body.match(/returnAuthMsg>([^<]+)/)?.[1]
-    const xmlMsg  = body.match(/errMsg>([^<]+)/)?.[1]
-    // JSON 형식: {"resultCode":"30","resultMsg":"..."}
-    const jsonCode = body.match(/"resultCode"\s*:\s*"([^"]+)"/)?.[1]
-    const jsonMsg  = body.match(/"resultMsg"\s*:\s*"([^"]+)"/)?.[1]
-    const code = xmlCode ?? jsonCode ?? ''
-    const msg  = xmlMsg  ?? jsonMsg  ?? body.slice(0, 150)
-    throw new Error(`HTTP ${res.status}${code ? ` [${code}]` : ''} — ${msg}`)
-  }
-
-  const json = JSON.parse(body)
-  const items = json?.response?.body?.items?.item
-  if (!items?.length) throw new Error('데이터 없음 (오늘 날짜는 몇 시간 전 데이터까지만 제공됩니다)')
-
-  return items.map((item, i) => ({
-    hour: i,
-    time: `${String(i).padStart(2, '0')}:00`,
-    temperature: parseFloat(item.ta) || 0,
-    humidity: parseFloat(item.hm) || 0,
-    windSpeed: parseFloat(item.ws) || 0,
-    cloudCover: parseFloat(item.dc10Tca) || 0,
-    // icsr: MJ/m²/h → W/m² (÷ 0.0036)
-    irradiance: Math.round((parseFloat(item.icsr) || 0) / 0.0036),
-    precipitation: parseFloat(item.rn) || 0,
-    isDemoData: false,
-  }))
+  return h.time.map((t, i) => {
+    const hour = new Date(t).getHours()
+    const elev = solarElevation(location.lat, date, hour + 0.5)
+    return {
+      hour,
+      time: `${String(hour).padStart(2, '0')}:00`,
+      temperature:   +(h.temperature_2m[i]        ?? 0).toFixed(1),
+      humidity:      Math.round(h.relative_humidity_2m[i] ?? 0),
+      windSpeed:     +(h.wind_speed_10m[i]         ?? 0).toFixed(1),
+      cloudCover:    Math.round((h.cloud_cover[i]  ?? 0) / 10),  // % → 0~10
+      irradiance:    Math.round(h.shortwave_radiation[i]  ?? 0), // W/m²
+      solarElevation: Math.round(elev * 10) / 10,
+      isDemoData: false,
+    }
+  })
 }
 
-export function useWeatherData(location, date, apiKey) {
-  const [data, setData] = useState(null)
+export function useWeatherData(location, date) {
+  const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [error, setError]     = useState(null)
 
   useEffect(() => {
     if (!location || !date) return
@@ -78,24 +62,17 @@ export function useWeatherData(location, date, apiKey) {
     setError(null)
 
     const run = async () => {
-      if (apiKey?.trim()) {
-        try {
-          const result = await fetchAsos(location.stnId, date, apiKey.trim())
-          setData(result)
-        } catch (e) {
-          const msg = `API 오류: ${e.message} — 데모 데이터로 표시합니다. (브라우저 콘솔 F12에서 자세한 내용 확인)`
-          setError(msg)
-          setData(generateMockData(location.lat, date))
-        }
-      } else {
-        await new Promise(r => setTimeout(r, 300))
+      try {
+        setData(await fetchOpenMeteo(location, date))
+      } catch (e) {
+        setError(`날씨 데이터 오류 (${e.message}) — 데모 데이터로 표시합니다.`)
         setData(generateMockData(location.lat, date))
       }
       setLoading(false)
     }
 
     run()
-  }, [location?.stnId, date?.toDateString(), apiKey])
+  }, [location?.stnId, date?.toDateString()])
 
   return { data, loading, error }
 }

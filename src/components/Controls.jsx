@@ -12,11 +12,11 @@ function parseInputDate(str) {
   return new Date(y, m - 1, d)
 }
 
-export default function Controls({ location, setLocation, date, setDate, apiKey, setApiKey }) {
+export default function Controls({ location, setLocation, date, setDate }) {
   const today = toInputValue(new Date())
 
   return (
-    <div className="rounded-xl bg-slate-800/50 p-4 flex flex-wrap gap-4 items-end">
+    <div className="rounded-xl bg-slate-800/50 p-4 flex flex-wrap gap-4 items-center">
       <div>
         <label className="mb-1 block text-xs text-slate-400">지역</label>
         <select
@@ -41,18 +41,11 @@ export default function Controls({ location, setLocation, date, setDate, apiKey,
         />
       </div>
 
-      <div className="flex-1 min-w-[240px]">
-        <label className="mb-1 block text-xs text-slate-400">
-          공공데이터 API 키
-          <span className="ml-1 text-slate-500">(없으면 데모 데이터 사용 · data.go.kr에서 발급)</span>
-        </label>
-        <input
-          type="text"
-          placeholder="기상청_지상(종관, ASOS) 서비스 키..."
-          value={apiKey}
-          onChange={e => setApiKey(e.target.value)}
-          className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
-        />
+      <div className="ml-auto text-xs text-slate-500">
+        기상 데이터 제공:
+        <span className="ml-1 text-slate-400">Open-Meteo</span>
+        <span className="mx-1 text-slate-600">·</span>
+        <span className="text-slate-400">API 키 불필요</span>
       </div>
     </div>
   )

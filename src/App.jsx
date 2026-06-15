@@ -12,11 +12,10 @@ import { calcPower } from './utils/solar'
 export default function App() {
   const [location, setLocation] = useState(LOCATIONS[0])
   const [date, setDate] = useState(new Date())
-  const [apiKey, setApiKey] = useState('')
   const [selectedHour, setSelectedHour] = useState(new Date().getHours())
   const [capacityKw, setCapacityKw] = useState(5)
 
-  const { data, loading, error } = useWeatherData(location, date, apiKey)
+  const { data, loading, error } = useWeatherData(location, date)
 
   const powerData = useMemo(() => {
     if (!data) return null
@@ -32,7 +31,6 @@ export default function App() {
         <Controls
           location={location} setLocation={setLocation}
           date={date} setDate={setDate}
-          apiKey={apiKey} setApiKey={setApiKey}
         />
 
         {error && (
