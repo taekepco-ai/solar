@@ -25,8 +25,11 @@ async function fetchKMA(location, date, apiKey) {
   const yesterday = new Date(date)
   yesterday.setDate(yesterday.getDate() - 1)
 
+  // serviceKey from data.go.kr is already URL-encoded (contains %2B, %3D, etc.)
+  // Injecting it directly avoids double-encoding (%2B → %252B) that causes 401
+  const keyParam = apiKey.includes('%') ? apiKey : encodeURIComponent(apiKey)
+
   const params = new URLSearchParams({
-    serviceKey: apiKey,
     numOfRows: '1000',
     pageNo: '1',
     dataType: 'JSON',
@@ -36,7 +39,7 @@ async function fetchKMA(location, date, apiKey) {
     ny: String(location.ny),
   })
 
-  const res = await fetch(`/api/kma?${params}`)
+  const res = await fetch(`/api/kma?serviceKey=${keyParam}&${params}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
   const json = await res.json()
