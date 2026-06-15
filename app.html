@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>태양광 발전 시뮬레이터</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.10.3/umd/Recharts.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.23.6/babel.min.js"></script>
+  <style>
+    body { background-color: #0f172a; margin: 0; }
+    input[type=range] { accent-color: #f59e0b; cursor: pointer; }
+    input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.6); }
+    select option { background: #1e293b; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect } = React;
+    const {
+      ComposedChart, Area, Bar, Line, XAxis, YAxis,
+      CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
+    } = Recharts;
+
+    // ── 상수 ────────────────────────────────────────────────────────
+    const LOCATIONS = [
+      { name: '서울', lat: 37.57, stnId: '108' },
+      { name: '부산', lat: 35.10, stnId: '159' },
+      { name: '대구', lat: 35.87, stnId: '143' },
+      { name: '인천', lat: 37.48, stnId: '112' },
+      { name: '광주', lat: 35.17, stnId: '156' },
+      { name: '대전', lat: 36.37, stnId: '133' },
+      { name: '울산', lat: 35.53, stnId: '152' },
+      { name: '제주', lat: 33.51, stnId: '184' },
+    ];
+
+    const KW_OPTIONS = [
+      { kw: 3,   label: '3 kW',   desc: '소형 주택' },
+      { kw: 5,   label: '5 kW',   desc: '일반 주택' },
+      { kw: 9,   label: '9 kW',   desc: '대형 주택' },
+      { kw: 15,  label: '15 kW',  desc: '소형 상업' },
+      { kw: 30,  label: '30 kW',  desc: '중형 상업' },
+      { kw: 100, label: '100 kW', desc: '산업용' },
+    ];
+
+    const CO2_PER_KWH = 0.459;
+
+    // ── 태양 계산 ────────────────────────────────────────────────────
+    function dayOfYear(date) {
+      return Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000);
+    }
+
+    function solarElevation(lat, date, hour) {
+      const doy = dayOfYear(date);
+      const decl = 23.45 * Math.sin((2 * Math.PI / 365) * (284 + doy));
+      const ha   = 15 * (hour - 12) * (Math.PI / 180);
+      const φ    = lat  * (Math.PI / 180);
+      const δ    = decl * (Math.PI / 180);
+      const sinE = Math.sin(φ)*Math.sin(δ) + Math.cos(φ)*Math.cos(δ)*Math.cos(ha);
+      return Math.asin(Math.max(-1, Math.min(1, sinE))) * (180 / Math.PI);
+    }
+
+    function clearSkyIrr(elev) {
+      if (elev <= 0) return 0;
+      const r = elev * (Math.PI / 180);
+      return 1361 * 0.7 * Math.pow(0.7, 1 / Math.sin(r)) * Math.sin(r);
+    }
+
+    function cloudFactor(cloud) {
+      return 1 - 0.75 * Math.pow(cloud / 10, 3.4);
+    }
+
+    function calcPower(capacityKw, irradiance, temp) {
+      if (irradiance <= 0) return 0;
+      const Tcell = temp + (45 - 20) / 800 * irradiance;
+      const tf    = Math.max(0, 1 - 0.004 * (Tcell - 25));
+      return Math.max(0, capacityKw * (irradiance / 1000) * tf * 0.8);
+    }
+
+    // ── 데모 데이터 생성 ─────────────────────────────────────────────
+    function generateMockData(lat, date) {
+      const month    = date.getMonth() + 1;
+      const baseTemp = month <= 2 || month === 12 ? 1 : month >= 6 && month <= 8 ? 29 : 15;
+      const seed     = date.getDate() + date.getMonth() * 31;
+      const cloudBase = 0.3 + 0.4 * Math.abs(Math.sin(seed));
+
+      return Array.from({ length: 24 }, (_, h) => {
+        const elev      = solarElevation(lat, date, h + 0.5);
+        const diurnal   = 7 * Math.sin(((h - 6) * Math.PI) / 12);
+        const cloudCover = Math.max(0, Math.min(10,
+          Math.round(cloudBase * 10 + Math.sin(h * 0.7 + seed) * 2)
+        ));
+        return {
+          hour: h,
+          time: String(h).padStart(2, '0') + ':00',
+          temperature:   Math.round((baseTemp + diurnal) * 10) / 10,
+          humidity:      Math.min(99, Math.round(65 - diurnal + (h < 7 ? 10 : 0))),
+          windSpeed:     Math.round((2.5 + Math.sin((h - 14) * 0.4)) * 10) / 10,
+          cloudCover,
+          irradiance:    Math.round(clearSkyIrr(elev) * cloudFactor(cloudCover)),
+          solarElevation: Math.round(elev * 10) / 10,
+          isDemoData: true,
+        };
+      });
+    }
+
+    // ── 데이터 훅 ────────────────────────────────────────────────────
+    function useWeatherData(location, date) {
+      const [data, setData]       = useState(null);
+      const [loading, setLoading] = useState(true);
+
+      useEffect(() => {
+        setLoading(true);
+        const t = setTimeout(() => {
+          setData(generateMockData(location.lat, date));
+          setLoading(false);
+        }, 300);
+        return () => clearTimeout(t);
+      }, [location.stnId, date.toDateString()]);
+
+      return { data, loading };
+    }
+
+    // ── 날짜 유틸 ────────────────────────────────────────────────────
+    function toInputVal(d) {
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+    function parseDate(s) {
+      const [y, m, d] = s.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+
+    // ── Header ───────────────────────────────────────────────────────
+    function Header() {
+      return (
+        <header className="sticky top-0 z-10 border-b border-slate-700/50 bg-slate-900/90 backdrop-blur-sm">
+          <div className="mx-auto max-w-7xl px-4 py-3 flex items-center gap-3">
+            <span className="text-2xl">☀️</span>
+            <div>
+              <h1 className="text-base font-bold text-white leading-none">태양광 발전 시뮬레이터</h1>
+              <p className="text-xs text-slate-400 mt-0.5">기상 데이터로 배우는 태양 에너지 원리</p>
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    // ── Controls ─────────────────────────────────────────────────────
+    function Controls({ location, setLocation, date, setDate }) {
+      return (
+        <div className="rounded-xl bg-slate-800/50 p-4 flex flex-wrap gap-4 items-end">
+          <div>
+            <label className="mb-1 block text-xs text-slate-400">지역</label>
+            <select
+              className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+              value={location.name}
+              onChange={e => setLocation(LOCATIONS.find(l => l.name === e.target.value))}
+            >
+              {LOCATIONS.map(l => <option key={l.name}>{l.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-400">날짜</label>
+            <input
+              type="date"
+              max={toInputVal(new Date())}
+              value={toInputVal(date)}
+              onChange={e => setDate(parseDate(e.target.value))}
+              className="rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+          </div>
+          <div className="flex-1 min-w-max">
+            <p className="text-xs text-slate-500">
+              💡 실제 데이터: <a href="https://data.go.kr" target="_blank" rel="noreferrer" className="text-amber-400 hover:underline">data.go.kr</a>에서 기상청 ASOS 서비스 키 발급 후 백엔드 프록시 연동 필요
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // ── WeatherCards ─────────────────────────────────────────────────
+    const CLOUD_LABEL = ['맑음','맑음','구름조금','구름조금','구름많음','구름많음','구름많음','흐림','흐림','흐림','흐림'];
+
+    function StatCard({ label, value, unit, sub, accent }) {
+      return (
+        <div className={`rounded-xl border p-4 bg-gradient-to-br ${accent}`}>
+          <div className="text-xs text-slate-400">{label}</div>
+          <div className="mt-1 text-2xl font-bold text-white">
+            {value}<span className="ml-1 text-sm font-normal text-slate-400">{unit}</span>
+          </div>
+          {sub && <div className="mt-1 text-xs text-slate-500">{sub}</div>}
+        </div>
+      );
+    }
+
+    function WeatherCards({ data, hour }) {
+      if (!data) return null;
+      const d       = data[hour] ?? data[12];
+      const peakIrr = Math.max(...data.map(x => x.irradiance));
+      return (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard label={`기온  ${d.time}`}   value={d.temperature} unit="°C"    sub={`습도 ${d.humidity}%`}               accent="from-cyan-500/10 to-cyan-700/5 border-cyan-500/20" />
+          <StatCard label="수평면 일사량"         value={d.irradiance}  unit="W/m²"  sub={`오늘 최대 ${peakIrr} W/m²`}       accent="from-amber-500/10 to-amber-700/5 border-amber-500/20" />
+          <StatCard label="운량"                  value={d.cloudCover}  unit="/ 10"  sub={CLOUD_LABEL[Math.min(10, Math.max(0, d.cloudCover))]} accent="from-blue-500/10 to-blue-700/5 border-blue-500/20" />
+          <StatCard label="풍속"                  value={d.windSpeed}   unit="m/s"   sub={`태양 고도 ${d.solarElevation}°`}   accent="from-green-500/10 to-green-700/5 border-green-500/20" />
+        </div>
+      );
+    }
+
+    // ── HourlyChart ──────────────────────────────────────────────────
+    function ChartTooltip({ active, payload, label }) {
+      if (!active || !payload?.length) return null;
+      return (
+        <div className="rounded-lg border border-slate-600 bg-slate-800 p-3 text-xs shadow-xl">
+          <p className="mb-2 font-medium text-slate-200">{label}</p>
+          {payload.map(p => (
+            <div key={p.name} className="flex justify-between gap-6" style={{ color: p.color }}>
+              <span>{p.name}</span>
+              <span className="font-mono">{(+p.value).toFixed(1)} {p.unit}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    function HourlyChart({ data, powerData, selectedHour, onHourChange }) {
+      if (!data) return null;
+      const chartData = data.map((d, i) => ({
+        time: d.time,
+        '일사량(W/m²)': d.irradiance,
+        '기온(°C)':     d.temperature,
+        '발전량(kW)':   powerData ? +powerData[i].toFixed(2) : 0,
+      }));
+
+      return (
+        <div className="rounded-xl bg-slate-800/50 p-4">
+          <div className="mb-1 flex items-center justify-between">
+            <h2 className="text-sm font-medium text-slate-300">시간별 일사량 · 기온 · 발전량</h2>
+            <span className="text-xs text-slate-500">← 슬라이더로 시간 선택</span>
+          </div>
+
+          <div className="mb-4 flex items-center gap-3">
+            <span className="text-xs text-slate-500 w-8">00시</span>
+            <input
+              type="range" min={0} max={23} value={selectedHour}
+              onChange={e => onHourChange(+e.target.value)}
+              className="flex-1 h-1.5"
+            />
+            <span className="text-sm font-mono font-semibold text-amber-400 w-10 text-right">
+              {String(selectedHour).padStart(2,'0')}시
+            </span>
+          </div>
+
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: -10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="time" tick={{ fill:'#64748b', fontSize:10 }} tickLine={false} interval={3} />
+              <YAxis yAxisId="pw"  orientation="left"  tick={{ fill:'#64748b', fontSize:10 }} tickLine={false} width={48} />
+              <YAxis yAxisId="tmp" orientation="right" tick={{ fill:'#64748b', fontSize:10 }} tickLine={false} width={36} />
+              <Tooltip content={<ChartTooltip />} />
+              <Legend wrapperStyle={{ fontSize:11, color:'#94a3b8', paddingTop:8 }} />
+              <ReferenceLine yAxisId="pw" x={chartData[selectedHour]?.time} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 2" />
+              <Area   yAxisId="pw"  type="monotone" dataKey="일사량(W/m²)" stroke="#f59e0b" fill="#f59e0b18" strokeWidth={2} dot={false} unit=" W/m²" />
+              <Bar    yAxisId="pw"  dataKey="발전량(kW)"   fill="#06b6d4" opacity={0.75} radius={[2,2,0,0]} unit=" kW" />
+              <Line   yAxisId="tmp" type="monotone" dataKey="기온(°C)"     stroke="#f43f5e" strokeWidth={1.5} dot={false} unit="°C" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
+
+    // ── PanelConfigurator ────────────────────────────────────────────
+    function PanelConfigurator({ capacityKw, onChange }) {
+      const [custom, setCustom]   = useState('');
+      const isPreset = KW_OPTIONS.some(o => o.kw === capacityKw);
+
+      const handleCustom = v => {
+        setCustom(v);
+        const n = parseFloat(v);
+        if (!isNaN(n) && n > 0) onChange(n);
+      };
+
+      return (
+        <div className="space-y-4 rounded-xl bg-slate-800/50 p-4">
+          <h2 className="text-sm font-medium text-slate-300">설치 용량</h2>
+
+          <div className="grid grid-cols-3 gap-2">
+            {KW_OPTIONS.map(({ kw, label, desc }) => (
+              <button key={kw}
+                onClick={() => { onChange(kw); setCustom(''); }}
+                className={`rounded-lg border px-3 py-3 text-left transition-all ${
+                  capacityKw === kw && isPreset
+                    ? 'border-amber-500 bg-amber-500/15'
+                    : 'border-slate-600 bg-slate-700/30 hover:border-slate-500'
+                }`}
+              >
+                <div className={`text-base font-bold ${capacityKw === kw && isPreset ? 'text-amber-400' : 'text-white'}`}>{label}</div>
+                <div className="text-xs text-slate-400 mt-0.5">{desc}</div>
+              </button>
+            ))}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-slate-400">직접 입력</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min="0.1" step="0.1" placeholder="예: 7.5"
+                value={custom}
+                onChange={e => handleCustom(e.target.value)}
+                className={`w-full rounded-lg border bg-slate-700 px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-amber-500 ${!isPreset && capacityKw ? 'border-amber-500' : 'border-slate-600'}`}
+              />
+              <span className="text-sm text-slate-400 whitespace-nowrap">kW</span>
+            </div>
+          </div>
+
+          <div className="rounded-lg bg-slate-700/40 px-3 py-2.5 text-xs text-slate-400 leading-relaxed">
+            <span className="font-medium text-slate-300">현재:</span>{' '}
+            <span className="font-mono text-amber-400">{capacityKw} kWp</span>
+            {' '}— 예상 연간{' '}
+            <span className="font-medium text-white">{Math.round(capacityKw * 1200).toLocaleString()} kWh</span>
+            <span className="text-slate-500"> (1,200 h/년 기준)</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ── PowerSummary ─────────────────────────────────────────────────
+    function SumCard({ label, value, unit, accent }) {
+      return (
+        <div className={`rounded-xl border p-4 bg-gradient-to-br ${accent}`}>
+          <p className="text-xs text-slate-400">{label}</p>
+          <p className="mt-1 text-xl font-bold text-white">
+            {value}<span className="ml-1 text-sm font-normal text-slate-400">{unit}</span>
+          </p>
+        </div>
+      );
+    }
+
+    function PowerSummary({ powerData }) {
+      if (!powerData) return null;
+      const totalKwh = powerData.reduce((s, p) => s + p, 0);
+      const peakKw   = Math.max(...powerData);
+      const co2      = totalKwh * CO2_PER_KWH;
+      return (
+        <div className="rounded-xl bg-slate-800/50 p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <h2 className="text-sm font-medium text-slate-300">오늘 발전 요약</h2>
+            <span className="rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-400">데모 데이터</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <SumCard label="총 발전량"      value={totalKwh.toFixed(1)} unit="kWh"  accent="from-amber-500/10 to-amber-700/5 border-amber-500/20" />
+            <SumCard label="최대 출력"       value={peakKw.toFixed(2)}   unit="kW"   accent="from-cyan-500/10 to-cyan-700/5 border-cyan-500/20" />
+            <SumCard label="CO₂ 절감"        value={co2.toFixed(1)}      unit="kg"   accent="from-green-500/10 to-green-700/5 border-green-500/20" />
+            <SumCard label="공급 가능 가구"  value={(totalKwh/10).toFixed(1)} unit="가구" accent="from-violet-500/10 to-violet-700/5 border-violet-500/20" />
+          </div>
+        </div>
+      );
+    }
+
+    // ── App ──────────────────────────────────────────────────────────
+    function App() {
+      const [location,     setLocation]     = useState(LOCATIONS[0]);
+      const [date,         setDate]         = useState(new Date());
+      const [selectedHour, setSelectedHour] = useState(new Date().getHours());
+      const [capacityKw,   setCapacityKw]   = useState(5);
+
+      const { data, loading } = useWeatherData(location, date);
+
+      const powerData = useMemo(() => {
+        if (!data) return null;
+        return data.map(d => calcPower(capacityKw, d.irradiance, d.temperature));
+      }, [data, capacityKw]);
+
+      return (
+        <div className="min-h-screen bg-slate-900 text-white">
+          <Header />
+          <main className="mx-auto max-w-7xl space-y-4 px-4 py-6">
+            <Controls location={location} setLocation={setLocation} date={date} setDate={setDate} />
+
+            {loading ? (
+              <div className="flex h-60 items-center justify-center gap-3 text-slate-400">
+                <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+                </svg>
+                <span>데이터 계산 중...</span>
+              </div>
+            ) : (
+              <>
+                <WeatherCards data={data} hour={selectedHour} />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <div className="lg:col-span-2">
+                    <HourlyChart
+                      data={data} powerData={powerData}
+                      selectedHour={selectedHour} onHourChange={setSelectedHour}
+                    />
+                  </div>
+                  <PanelConfigurator capacityKw={capacityKw} onChange={setCapacityKw} />
+                </div>
+                <PowerSummary powerData={powerData} />
+              </>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
