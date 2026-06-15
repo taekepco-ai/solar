@@ -12,11 +12,18 @@ function parseInputDate(str) {
   return new Date(y, m - 1, d)
 }
 
-export default function Controls({ location, setLocation, date, setDate }) {
+const SOURCE_LABEL = {
+  kma:       { text: 'KMA 단기예보', color: 'text-sky-400' },
+  openmeteo: { text: 'Open-Meteo',  color: 'text-slate-400' },
+  demo:      { text: '데모 데이터', color: 'text-amber-400' },
+}
+
+export default function Controls({ location, setLocation, date, setDate, apiKey, setApiKey, dataSource }) {
   const today = toInputValue(new Date())
+  const src = SOURCE_LABEL[dataSource] ?? SOURCE_LABEL.openmeteo
 
   return (
-    <div className="rounded-xl bg-slate-800/50 p-4 flex flex-wrap gap-4 items-center">
+    <div className="rounded-xl bg-slate-800/50 p-4 flex flex-wrap gap-4 items-end">
       <div>
         <label className="mb-1 block text-xs text-slate-400">지역</label>
         <select
@@ -41,8 +48,22 @@ export default function Controls({ location, setLocation, date, setDate }) {
         />
       </div>
 
-      <div className="ml-auto text-xs text-slate-500">
-        기상 데이터 제공: <span className="text-slate-400">Open-Meteo</span>
+      <div className="flex-1 min-w-[200px]">
+        <label className="mb-1 block text-xs text-slate-400">
+          공공데이터 API 키 <span className="text-slate-500">(오늘 날씨: KMA 단기예보)</span>
+        </label>
+        <input
+          type="password"
+          autoComplete="off"
+          placeholder="API 키 입력 시 오늘 날짜에 KMA 데이터 사용"
+          value={apiKey}
+          onChange={e => setApiKey(e.target.value)}
+          className="w-full rounded-lg border border-slate-600 bg-slate-700 px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+        />
+      </div>
+
+      <div className="ml-auto text-xs text-slate-500 pb-2">
+        기상 데이터: <span className={src.color}>{src.text}</span>
       </div>
     </div>
   )

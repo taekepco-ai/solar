@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import Header from './components/Header'
 import Controls from './components/Controls'
 import WeatherCards from './components/WeatherCards'
@@ -10,12 +10,18 @@ import { LOCATIONS } from './constants'
 import { calcPower } from './utils/solar'
 
 export default function App() {
-  const [location, setLocation] = useState(LOCATIONS[0])
-  const [date, setDate] = useState(new Date())
+  const [location, setLocation]   = useState(LOCATIONS[0])
+  const [date, setDate]           = useState(new Date())
   const [selectedHour, setSelectedHour] = useState(new Date().getHours())
-  const [capacityKw, setCapacityKw] = useState(5)
+  const [capacityKw, setCapacityKw]     = useState(5)
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('kmaApiKey') ?? '')
 
-  const { data, loading, error } = useWeatherData(location, date)
+  const handleSetApiKey = useCallback((key) => {
+    setApiKey(key)
+    localStorage.setItem('kmaApiKey', key)
+  }, [])
+
+  const { data, loading, error, dataSource } = useWeatherData(location, date, apiKey)
 
   const powerData = useMemo(() => {
     if (!data) return null
@@ -31,6 +37,8 @@ export default function App() {
         <Controls
           location={location} setLocation={setLocation}
           date={date} setDate={setDate}
+          apiKey={apiKey} setApiKey={handleSetApiKey}
+          dataSource={dataSource}
         />
 
         {error && (
