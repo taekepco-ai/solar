@@ -160,7 +160,7 @@ export default async function handler(req, res) {
   const hours = await fetchForecast(LOCATION, yesterday.ymd, tomorrow)
   const html  = generateHTML(tomorrow, hours)
 
-  const transporter = nodemailer.createTransporter({
+  const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD },
   })
