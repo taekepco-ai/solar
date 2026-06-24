@@ -47,7 +47,7 @@ async function fetchForecast(location, baseYmd, targetDate) {
   const keyParam = key.includes('%') ? key : encodeURIComponent(key)
   const params = new URLSearchParams({
     numOfRows: '1000', pageNo: '1', dataType: 'JSON',
-    base_date: baseYmd, base_time: '2000',
+    base_date: baseYmd, base_time: '2300',
     nx: String(location.nx), ny: String(location.ny),
   })
   const res = await fetch(
@@ -154,10 +154,10 @@ export default async function handler(req, res) {
   if (!process.env.GMAIL_USER)           return res.status(500).json({ error: 'GMAIL_USER 미설정' })
   if (!process.env.GMAIL_APP_PASSWORD)   return res.status(500).json({ error: 'GMAIL_APP_PASSWORD 미설정' })
 
-  const today    = kstDateStr(0)
-  const tomorrow = kstDateStr(1)
+  const yesterday = kstDateStr(-1)  // 전날 23시 발표분 → 항상 사용 가능
+  const tomorrow  = kstDateStr(1)
 
-  const hours = await fetchForecast(LOCATION, today.ymd, tomorrow)
+  const hours = await fetchForecast(LOCATION, yesterday.ymd, tomorrow)
   const html  = generateHTML(tomorrow, hours)
 
   const transporter = nodemailer.createTransporter({
