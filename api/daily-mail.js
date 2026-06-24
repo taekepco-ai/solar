@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer'
 
-// ── 태양 계산 (src/utils/solar.js와 동일 로직, API 함수라 직접 인라인) ──────
+// ── 태양 계산 ─────────────────────────────────────────────────────────────────
 function dayOfYear(date) {
   return Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000)
 }
@@ -24,19 +24,20 @@ function calcPower(kw, irr, temp) {
   return Math.max(0, kw * (irr / 1000) * Math.max(0, 1 - 0.004 * (Tc - 25)) * 0.8)
 }
 
-// ── 상수 ──────────────────────────────────────────────────────────────────────
+// ── 상수 ─────────────────────────────────────────────────────────────────────
 const LOCATION = { name: '창원', nx: 91, ny: 77, lat: 35.17 }
+const DAYS = ['일', '월', '화', '수', '목', '금', '토']
 
-// ── KST 날짜 헬퍼 ─────────────────────────────────────────────────────────────
+// ── KST 날짜 헬퍼 ────────────────────────────────────────────────────────────
 function kstDateStr(offsetDays = 0) {
   const d = new Date(Date.now() + (9 * 60 + offsetDays * 24 * 60) * 60000)
   const y = d.getUTCFullYear()
   const m = String(d.getUTCMonth() + 1).padStart(2, '0')
   const dd = String(d.getUTCDate()).padStart(2, '0')
-  return { ymd: `${y}${m}${dd}`, dateObj: new Date(y, d.getUTCMonth(), d.getUTCDate()), y, m, dd }
+  return { ymd: `${y}${m}${dd}`, isoDate: `${y}-${m}-${dd}`, dateObj: new Date(y, d.getUTCMonth(), d.getUTCDate()), y, m, dd }
 }
 
-// ── KMA 단기예보 조회 ──────────────────────────────────────────────────────────
+// ── KMA 단기예보 ──────────────────────────────────────────────────────────────
 function skyToCloud(v) {
   const n = parseInt(v, 10)
   return n === 1 ? 2 : n === 3 ? 6 : 9
@@ -73,25 +74,65 @@ async function fetchForecast(location, baseYmd, targetDate) {
     if (h.TMP !== undefined) lastTmp = h.TMP
     if (h.REH !== undefined) lastReh = h.REH
     if (h.WSD !== undefined) lastWsd = h.WSD
-
     const cloudCover = skyToCloud(lastSky)
     const elev = solarElevation(location.lat, targetDate.dateObj, hour + 0.5)
     const irr = Math.round(Math.max(0, clearSkyIrradiance(elev)) * cloudFactor(cloudCover))
-    const temp = parseFloat(lastTmp)
-    return { hour, temp, irr, cloudCover }
+    return { hour, temp: parseFloat(lastTmp), irr, cloudCover }
   })
 }
 
-// ── 이메일 HTML 생성 ───────────────────────────────────────────────────────────
+// ── 에어코리아 미세먼지 예보 ──────────────────────────────────────────────────
+const GRADE_EMOJI = { '좋음': '💚 좋음', '보통': '💛 보통', '나쁨': '🔴 나쁨', '매우나쁨': '🟣 매우나쁨' }
+
+async function fetchAirQuality(isoDate) {
+  const key = process.env.KMA_SERVICE_KEY
+  const keyParam = key.includes('%') ? key : encodeURIComponent(key)
+
+  const fetchCode = async (code) => {
+    const params = new URLSearchParams({
+      returnType: 'json', numOfRows: '10', pageNo: '1',
+      searchDate: isoDate, InformCode: code,
+    })
+    const res = await fetch(
+      `https://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMinuDustFrcstDspth?serviceKey=${keyParam}&${params}`
+    )
+    const json = await res.json()
+    const items = json.response?.body?.items ?? []
+    // 가장 최신 예보에서 경남 등급 추출
+    for (const item of items) {
+      const grade = item.informGrade?.split(',')
+        .map(s => s.trim())
+        .find(s => s.startsWith('경남'))
+        ?.split(':')[1]?.trim()
+      if (grade) return GRADE_EMOJI[grade] ?? grade
+    }
+    return '정보없음'
+  }
+
+  const [pm10, pm25] = await Promise.all([fetchCode('PM10'), fetchCode('PM25')])
+  return { pm10, pm25 }
+}
+
+// ── Google News RSS 헤드라인 ──────────────────────────────────────────────────
+async function fetchNews() {
+  const res = await fetch('https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko', {
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  })
+  const xml = await res.text()
+  const titles = [...xml.matchAll(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/g)]
+    .slice(1, 4)  // 첫 번째는 피드 제목
+    .map(m => m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim())
+  return titles
+}
+
+// ── 이메일 HTML ───────────────────────────────────────────────────────────────
 function skyLabel(cc) {
   if (cc <= 3) return '☀️ 맑음'
   if (cc <= 7) return '⛅ 구름많음'
   return '☁️ 흐림'
 }
 
-const DAYS = ['일', '월', '화', '수', '목', '금', '토']
-
-function generateHTML(tomorrow, hours) {
+function generateHTML(tomorrow, hours, air, headlines) {
   const dayName = DAYS[tomorrow.dateObj.getDay()] + '요일'
   const dateStr = `${tomorrow.y}년 ${tomorrow.m}월 ${tomorrow.dd}일 (${dayName})`
   const temps = hours.map(h => h.temp)
@@ -99,7 +140,6 @@ function generateHTML(tomorrow, hours) {
   const maxT = Math.max(...temps).toFixed(0)
   const totalGen = hours.reduce((s, h) => s + calcPower(5, h.irr, h.temp), 0).toFixed(1)
 
-  // 시간대별 표: 06 ~ 19시
   const timeRows = hours.slice(6, 20).map(h => `
     <tr>
       <td style="padding:8px 14px;color:#555">${String(h.hour).padStart(2,'0')}:00</td>
@@ -109,6 +149,30 @@ function generateHTML(tomorrow, hours) {
       <td style="padding:8px 14px;text-align:right">${calcPower(5, h.irr, h.temp).toFixed(2)} kWh</td>
     </tr>`).join('')
 
+  const airSection = air ? `
+  <div style="display:flex;border-bottom:1px solid #eee">
+    <div style="flex:1;padding:12px 16px;border-right:1px solid #eee">
+      <div style="font-size:11px;color:#888;margin-bottom:4px">미세먼지 PM10</div>
+      <div style="font-size:16px;font-weight:bold">${air.pm10}</div>
+    </div>
+    <div style="flex:1;padding:12px 16px">
+      <div style="font-size:11px;color:#888;margin-bottom:4px">초미세먼지 PM2.5</div>
+      <div style="font-size:16px;font-weight:bold">${air.pm25}</div>
+    </div>
+  </div>` : ''
+
+  const newsItems = headlines.map((h, i) =>
+    `<div style="padding:8px 0;${i < headlines.length - 1 ? 'border-bottom:1px solid #f0f0f0' : ''}">
+      <span style="color:#888;font-size:12px;margin-right:8px">${i + 1}</span>${h}
+    </div>`
+  ).join('')
+
+  const newsSection = headlines.length > 0 ? `
+  <div style="padding:14px 16px;border-top:1px solid #eee">
+    <div style="font-size:11px;color:#888;font-weight:600;margin-bottom:8px;text-transform:uppercase">오늘의 주요 뉴스</div>
+    <div style="font-size:13px;line-height:1.6;color:#333">${newsItems}</div>
+  </div>` : ''
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   body{font-family:-apple-system,sans-serif;background:#f0f4f8;margin:0;padding:24px}
@@ -116,10 +180,10 @@ function generateHTML(tomorrow, hours) {
   .hdr{background:linear-gradient(135deg,#1a365d,#2b6cb0);padding:24px 20px;color:#fff}
   .hdr h1{margin:0 0 6px;font-size:22px}
   .hdr p{margin:0;opacity:.8;font-size:14px}
-  .summary{display:flex;gap:0;border-bottom:1px solid #eee}
-  .stat{flex:1;padding:16px;text-align:center;border-right:1px solid #eee}
+  .summary{display:flex;border-bottom:1px solid #eee}
+  .stat{flex:1;padding:14px;text-align:center;border-right:1px solid #eee}
   .stat:last-child{border-right:none}
-  .stat-val{font-size:22px;font-weight:bold;color:#1a365d}
+  .stat-val{font-size:20px;font-weight:bold;color:#1a365d}
   .stat-lbl{font-size:11px;color:#888;margin-top:2px}
   table{width:100%;border-collapse:collapse}
   thead tr{background:#ebf4ff;font-size:11px;color:#555}
@@ -135,33 +199,40 @@ function generateHTML(tomorrow, hours) {
   </div>
   <div class="summary">
     <div class="stat"><div class="stat-val">${minT}°~${maxT}°C</div><div class="stat-lbl">기온 범위</div></div>
-    <div class="stat"><div class="stat-val">${totalGen} kWh</div><div class="stat-lbl">예상 발전량 (5 kW)</div></div>
+    <div class="stat"><div class="stat-val">${totalGen} kWh</div><div class="stat-lbl">발전량 (5 kW)</div></div>
     <div class="stat"><div class="stat-val">${skyLabel(hours.slice(10,15).reduce((s,h)=>s+h.cloudCover,0)/5)}</div><div class="stat-lbl">낮 날씨</div></div>
   </div>
+  ${airSection}
   <table>
     <thead><tr>
       <th>시각</th><th>날씨</th><th>기온</th><th style="text-align:right">일사량</th><th style="text-align:right">발전량</th>
     </tr></thead>
     <tbody>${timeRows}</tbody>
   </table>
-  <div class="ftr">기상청 단기예보 기반 추정값 · 실제와 차이가 있을 수 있습니다</div>
+  ${newsSection}
+  <div class="ftr">기상청 단기예보 · 에어코리아 · Google News 기반</div>
 </div>
 </body></html>`
 }
 
-// ── Vercel Cron 핸들러  (vercel.json: "0 12 * * *" = KST 21:00) ────────────
+// ── Vercel Cron 핸들러 (vercel.json: "0 12 * * *" = KST 21:00) ──────────────
 export const config = { maxDuration: 60 }
 
 export default async function handler(req, res) {
-  if (!process.env.KMA_SERVICE_KEY)      return res.status(500).json({ error: 'KMA_SERVICE_KEY 미설정' })
-  if (!process.env.GMAIL_USER)           return res.status(500).json({ error: 'GMAIL_USER 미설정' })
-  if (!process.env.GMAIL_APP_PASSWORD)   return res.status(500).json({ error: 'GMAIL_APP_PASSWORD 미설정' })
+  if (!process.env.KMA_SERVICE_KEY)    return res.status(500).json({ error: 'KMA_SERVICE_KEY 미설정' })
+  if (!process.env.GMAIL_USER)         return res.status(500).json({ error: 'GMAIL_USER 미설정' })
+  if (!process.env.GMAIL_APP_PASSWORD) return res.status(500).json({ error: 'GMAIL_APP_PASSWORD 미설정' })
 
   const today    = kstDateStr(0)
   const tomorrow = kstDateStr(1)
 
-  const hours = await fetchForecast(LOCATION, today.ymd, tomorrow)
-  const html  = generateHTML(tomorrow, hours)
+  const [hours, air, headlines] = await Promise.all([
+    fetchForecast(LOCATION, today.ymd, tomorrow),
+    fetchAirQuality(tomorrow.isoDate).catch(() => null),
+    fetchNews().catch(() => []),
+  ])
+
+  const html = generateHTML(tomorrow, hours, air, headlines)
 
   const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -175,5 +246,5 @@ export default async function handler(req, res) {
     html,
   })
 
-  res.status(200).json({ ok: true, date: `${tomorrow.y}-${tomorrow.m}-${tomorrow.dd}` })
+  res.status(200).json({ ok: true, date: tomorrow.isoDate })
 }
