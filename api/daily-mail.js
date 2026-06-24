@@ -25,7 +25,7 @@ function calcPower(kw, irr, temp) {
 }
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
-const LOCATION = { name: '경남', nx: 91, ny: 77, lat: 35.17 }
+const LOCATION = { name: '창원', nx: 91, ny: 77, lat: 35.17 }
 
 // ── KST 날짜 헬퍼 ─────────────────────────────────────────────────────────────
 function kstDateStr(offsetDays = 0) {
@@ -47,7 +47,7 @@ async function fetchForecast(location, baseYmd, targetDate) {
   const keyParam = key.includes('%') ? key : encodeURIComponent(key)
   const params = new URLSearchParams({
     numOfRows: '1000', pageNo: '1', dataType: 'JSON',
-    base_date: baseYmd, base_time: '2300',
+    base_date: baseYmd, base_time: '2000',
     nx: String(location.nx), ny: String(location.ny),
   })
   const res = await fetch(
@@ -89,8 +89,11 @@ function skyLabel(cc) {
   return '☁️ 흐림'
 }
 
+const DAYS = ['일', '월', '화', '수', '목', '금', '토']
+
 function generateHTML(tomorrow, hours) {
-  const dateStr = `${tomorrow.y}년 ${tomorrow.m}월 ${tomorrow.dd}일`
+  const dayName = DAYS[tomorrow.dateObj.getDay()] + '요일'
+  const dateStr = `${tomorrow.y}년 ${tomorrow.m}월 ${tomorrow.dd}일 (${dayName})`
   const temps = hours.map(h => h.temp)
   const minT = Math.min(...temps).toFixed(0)
   const maxT = Math.max(...temps).toFixed(0)
@@ -127,8 +130,8 @@ function generateHTML(tomorrow, hours) {
 </head><body>
 <div class="wrap">
   <div class="hdr">
-    <h1>☀️ 경남 태양광 발전 예보</h1>
-    <p>${dateStr} (내일)</p>
+    <h1>🌤 창원 날씨 예보</h1>
+    <p>${dateStr}</p>
   </div>
   <div class="summary">
     <div class="stat"><div class="stat-val">${minT}°~${maxT}°C</div><div class="stat-lbl">기온 범위</div></div>
@@ -154,10 +157,10 @@ export default async function handler(req, res) {
   if (!process.env.GMAIL_USER)           return res.status(500).json({ error: 'GMAIL_USER 미설정' })
   if (!process.env.GMAIL_APP_PASSWORD)   return res.status(500).json({ error: 'GMAIL_APP_PASSWORD 미설정' })
 
-  const yesterday = kstDateStr(-1)  // 전날 23시 발표분 → 항상 사용 가능
-  const tomorrow  = kstDateStr(1)
+  const today    = kstDateStr(0)
+  const tomorrow = kstDateStr(1)
 
-  const hours = await fetchForecast(LOCATION, yesterday.ymd, tomorrow)
+  const hours = await fetchForecast(LOCATION, today.ymd, tomorrow)
   const html  = generateHTML(tomorrow, hours)
 
   const transporter = nodemailer.createTransport({
@@ -166,9 +169,9 @@ export default async function handler(req, res) {
   })
 
   await transporter.sendMail({
-    from: `태양광 예보 <${process.env.GMAIL_USER}>`,
+    from: `날씨 예보 <${process.env.GMAIL_USER}>`,
     to: process.env.MAIL_TO ?? process.env.GMAIL_USER,
-    subject: `☀️ 내일(${tomorrow.y}.${tomorrow.m}.${tomorrow.dd}) 태양광 발전 예보`,
+    subject: `🌤 창원 날씨 예보 · ${tomorrow.m}/${tomorrow.dd}(${DAYS[tomorrow.dateObj.getDay()]})`,
     html,
   })
 
