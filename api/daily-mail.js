@@ -25,17 +25,7 @@ function calcPower(kw, irr, temp) {
 }
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
-const LOCATIONS = [
-  { name: '서울', nx: 60,  ny: 127, lat: 37.57 },
-  { name: '부산', nx: 98,  ny: 76,  lat: 35.10 },
-  { name: '대구', nx: 89,  ny: 90,  lat: 35.87 },
-  { name: '인천', nx: 55,  ny: 124, lat: 37.48 },
-  { name: '광주', nx: 58,  ny: 74,  lat: 35.17 },
-  { name: '대전', nx: 67,  ny: 100, lat: 36.37 },
-  { name: '울산', nx: 102, ny: 84,  lat: 35.53 },
-  { name: '경남', nx: 91,  ny: 77,  lat: 35.17 },
-  { name: '제주', nx: 53,  ny: 38,  lat: 33.51 },
-]
+const LOCATION = { name: '경남', nx: 91, ny: 77, lat: 35.17 }
 
 // ── KST 날짜 헬퍼 ─────────────────────────────────────────────────────────────
 function kstDateStr(offsetDays = 0) {
@@ -93,60 +83,63 @@ async function fetchForecast(location, baseYmd, targetDate) {
 }
 
 // ── 이메일 HTML 생성 ───────────────────────────────────────────────────────────
-function skyLabel(hours) {
-  const avg = hours.slice(10, 16).reduce((s, h) => s + h.cloudCover, 0) / 6
-  if (avg <= 3) return '☀️ 맑음'
-  if (avg <= 7) return '⛅ 구름많음'
+function skyLabel(cc) {
+  if (cc <= 3) return '☀️ 맑음'
+  if (cc <= 7) return '⛅ 구름많음'
   return '☁️ 흐림'
 }
 
-function genKwh(hours, kw = 5) {
-  return hours.reduce((s, h) => s + calcPower(kw, h.irr, h.temp), 0).toFixed(1)
-}
-
-function makeRow(name, hours) {
-  if (!hours) {
-    return `<tr><td class="loc">${name}</td><td colspan="3" style="color:#aaa;padding:10px 14px">데이터 없음</td></tr>`
-  }
+function generateHTML(tomorrow, hours) {
+  const dateStr = `${tomorrow.y}년 ${tomorrow.m}월 ${tomorrow.dd}일`
   const temps = hours.map(h => h.temp)
   const minT = Math.min(...temps).toFixed(0)
   const maxT = Math.max(...temps).toFixed(0)
-  return `
-  <tr>
-    <td class="loc">${name}</td>
-    <td style="padding:10px 14px">${skyLabel(hours)}</td>
-    <td style="padding:10px 14px">${minT}°C ~ ${maxT}°C</td>
-    <td style="padding:10px 14px;text-align:right"><b>${genKwh(hours)} kWh</b></td>
-  </tr>`
-}
+  const totalGen = hours.reduce((s, h) => s + calcPower(5, h.irr, h.temp), 0).toFixed(1)
 
-function generateHTML(tomorrow, rows) {
-  const dateStr = `${tomorrow.y}년 ${tomorrow.m}월 ${tomorrow.dd}일`
+  // 시간대별 표: 06 ~ 19시
+  const timeRows = hours.slice(6, 20).map(h => `
+    <tr>
+      <td style="padding:8px 14px;color:#555">${String(h.hour).padStart(2,'0')}:00</td>
+      <td style="padding:8px 14px">${skyLabel(h.cloudCover)}</td>
+      <td style="padding:8px 14px">${h.temp.toFixed(0)}°C</td>
+      <td style="padding:8px 14px;text-align:right">${h.irr} W/m²</td>
+      <td style="padding:8px 14px;text-align:right">${calcPower(5, h.irr, h.temp).toFixed(2)} kWh</td>
+    </tr>`).join('')
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   body{font-family:-apple-system,sans-serif;background:#f0f4f8;margin:0;padding:24px}
-  .wrap{max-width:540px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.1)}
+  .wrap{max-width:560px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.1)}
   .hdr{background:linear-gradient(135deg,#1a365d,#2b6cb0);padding:24px 20px;color:#fff}
-  .hdr h1{margin:0 0 4px;font-size:22px}
+  .hdr h1{margin:0 0 6px;font-size:22px}
   .hdr p{margin:0;opacity:.8;font-size:14px}
+  .summary{display:flex;gap:0;border-bottom:1px solid #eee}
+  .stat{flex:1;padding:16px;text-align:center;border-right:1px solid #eee}
+  .stat:last-child{border-right:none}
+  .stat-val{font-size:22px;font-weight:bold;color:#1a365d}
+  .stat-lbl{font-size:11px;color:#888;margin-top:2px}
   table{width:100%;border-collapse:collapse}
-  thead tr{background:#ebf4ff;font-size:11px;color:#555;text-transform:uppercase}
-  thead th{padding:8px 14px;text-align:left;font-weight:600}
+  thead tr{background:#ebf4ff;font-size:11px;color:#555}
+  thead th{padding:7px 14px;text-align:left;font-weight:600}
   tbody tr:nth-child(even){background:#f9fafb}
-  .loc{padding:10px 14px;font-weight:bold}
   .ftr{padding:10px 16px;font-size:11px;color:#aaa;border-top:1px solid #eee;text-align:center}
 </style>
 </head><body>
 <div class="wrap">
   <div class="hdr">
-    <h1>☀️ 태양광 발전 예보</h1>
-    <p>${dateStr} (내일) · 5 kW 시스템 기준</p>
+    <h1>☀️ 경남 태양광 발전 예보</h1>
+    <p>${dateStr} (내일)</p>
+  </div>
+  <div class="summary">
+    <div class="stat"><div class="stat-val">${minT}°~${maxT}°C</div><div class="stat-lbl">기온 범위</div></div>
+    <div class="stat"><div class="stat-val">${totalGen} kWh</div><div class="stat-lbl">예상 발전량 (5 kW)</div></div>
+    <div class="stat"><div class="stat-val">${skyLabel(hours.slice(10,15).reduce((s,h)=>s+h.cloudCover,0)/5)}</div><div class="stat-lbl">낮 날씨</div></div>
   </div>
   <table>
     <thead><tr>
-      <th>지역</th><th>날씨</th><th>기온</th><th style="text-align:right">예상 발전량</th>
+      <th>시각</th><th>날씨</th><th>기온</th><th style="text-align:right">일사량</th><th style="text-align:right">발전량</th>
     </tr></thead>
-    <tbody>${rows}</tbody>
+    <tbody>${timeRows}</tbody>
   </table>
   <div class="ftr">기상청 단기예보 기반 추정값 · 실제와 차이가 있을 수 있습니다</div>
 </div>
@@ -164,18 +157,8 @@ export default async function handler(req, res) {
   const today    = kstDateStr(0)
   const tomorrow = kstDateStr(1)
 
-  const results = await Promise.all(
-    LOCATIONS.map(async (loc) => {
-      try {
-        return { name: loc.name, hours: await fetchForecast(loc, today.ymd, tomorrow) }
-      } catch {
-        return { name: loc.name, hours: null }
-      }
-    })
-  )
-
-  const rows = results.map(r => makeRow(r.name, r.hours)).join('')
-  const html = generateHTML(tomorrow, rows)
+  const hours = await fetchForecast(LOCATION, today.ymd, tomorrow)
+  const html  = generateHTML(tomorrow, hours)
 
   const transporter = nodemailer.createTransporter({
     service: 'gmail',
