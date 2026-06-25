@@ -1,32 +1,10 @@
 import nodemailer from 'nodemailer'
 
-// ── 태양 계산 ─────────────────────────────────────────────────────────────────
-function dayOfYear(date) {
-  return Math.floor((date - new Date(date.getFullYear(), 0, 0)) / 86400000)
-}
-function solarElevation(lat, date, hour) {
-  const decl = 23.45 * Math.sin((2 * Math.PI / 365) * (284 + dayOfYear(date)))
-  const ha = (15 * (hour - 12)) * (Math.PI / 180)
-  const lr = lat * (Math.PI / 180), dr = decl * (Math.PI / 180)
-  return Math.asin(Math.max(-1, Math.min(1,
-    Math.sin(lr) * Math.sin(dr) + Math.cos(lr) * Math.cos(dr) * Math.cos(ha)
-  ))) * (180 / Math.PI)
-}
-function clearSkyIrradiance(elev) {
-  if (elev <= 0) return 0
-  const r = elev * (Math.PI / 180)
-  return 1361 * 0.7 * Math.pow(0.7, 1 / Math.sin(r)) * Math.sin(r)
-}
-function cloudFactor(cc) { return 1 - 0.75 * Math.pow(cc / 10, 3.4) }
-function calcPower(kw, irr, temp) {
-  if (irr <= 0) return 0
-  const Tc = temp + (45 - 20) / 800 * irr
-  return Math.max(0, kw * (irr / 1000) * Math.max(0, 1 - 0.004 * (Tc - 25)) * 0.8)
-}
-
 // ── 상수 ─────────────────────────────────────────────────────────────────────
 const LOCATION = { name: '창원', nx: 91, ny: 77, lat: 35.17 }
 const DAYS = ['일', '월', '화', '수', '목', '금', '토']
+const GRADE_EMOJI = { '좋음': '💚 좋음', '보통': '💛 보통', '나쁨': '🔴 나쁨', '매우나쁨': '🟣 매우나쁨' }
+const PTY_ICON = { 1: '🌧', 2: '🌨', 3: '❄️', 5: '🌦', 6: '🌨', 7: '❄️' }
 
 // ── KST 날짜 헬퍼 ────────────────────────────────────────────────────────────
 function kstDateStr(offsetDays = 0) {
@@ -67,62 +45,63 @@ async function fetchForecast(location, baseYmd, targetDate) {
     byHour[hour][item.category] = item.fcstValue
   }
 
-  let lastSky = '1', lastTmp = '15', lastReh = '50', lastWsd = '0'
+  let lastSky = '1', lastTmp = '15', lastPty = '0', lastPcp = '강수없음', lastPop = '0'
   return Array.from({ length: 24 }, (_, hour) => {
     const h = byHour[hour] ?? {}
     if (h.SKY !== undefined) lastSky = h.SKY
     if (h.TMP !== undefined) lastTmp = h.TMP
-    if (h.REH !== undefined) lastReh = h.REH
-    if (h.WSD !== undefined) lastWsd = h.WSD
-    const cloudCover = skyToCloud(lastSky)
-    const elev = solarElevation(location.lat, targetDate.dateObj, hour + 0.5)
-    const irr = Math.round(Math.max(0, clearSkyIrradiance(elev)) * cloudFactor(cloudCover))
-    return { hour, temp: parseFloat(lastTmp), irr, cloudCover }
+    if (h.PTY !== undefined) lastPty = h.PTY
+    if (h.PCP !== undefined) lastPcp = h.PCP
+    if (h.POP !== undefined) lastPop = h.POP
+    return {
+      hour,
+      temp: parseFloat(lastTmp),
+      cloudCover: skyToCloud(lastSky),
+      pty: parseInt(lastPty, 10),
+      pcp: lastPcp,
+      pop: parseInt(lastPop, 10),
+    }
   })
 }
 
 // ── 에어코리아 미세먼지 예보 ──────────────────────────────────────────────────
-const GRADE_EMOJI = { '좋음': '💚 좋음', '보통': '💛 보통', '나쁨': '🔴 나쁨', '매우나쁨': '🟣 매우나쁨' }
-
-async function fetchAirQuality(isoDate) {
+async function fetchAirQuality(todayIso) {
   const key = process.env.KMA_SERVICE_KEY
   const keyParam = key.includes('%') ? key : encodeURIComponent(key)
 
   const fetchCode = async (code) => {
     const params = new URLSearchParams({
       returnType: 'json', numOfRows: '10', pageNo: '1',
-      searchDate: isoDate, InformCode: code,
+      searchDate: todayIso, InformCode: code,
     })
     const res = await fetch(
       `https://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMinuDustFrcstDspth?serviceKey=${keyParam}&${params}`
     )
     const json = await res.json()
     const items = json.response?.body?.items ?? []
-    // 가장 최신 예보에서 경남 등급 추출
     for (const item of items) {
-      const grade = item.informGrade?.split(',')
-        .map(s => s.trim())
-        .find(s => s.startsWith('경남'))
-        ?.split(':')[1]?.trim()
-      if (grade) return GRADE_EMOJI[grade] ?? grade
+      for (const part of (item.informGrade ?? '').split(',')) {
+        const [region, grade] = part.split(':').map(s => s.trim())
+        if (region === '경남' && grade) return GRADE_EMOJI[grade] ?? grade
+      }
     }
-    return '정보없음'
+    return null
   }
 
   const [pm10, pm25] = await Promise.all([fetchCode('PM10'), fetchCode('PM25')])
-  return { pm10, pm25 }
+  return (pm10 || pm25) ? { pm10: pm10 ?? '-', pm25: pm25 ?? '-' } : null
 }
 
-// ── Google News RSS 헤드라인 ──────────────────────────────────────────────────
+// ── 경제 뉴스 RSS ─────────────────────────────────────────────────────────────
 async function fetchNews() {
-  const res = await fetch('https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko', {
-    headers: { 'User-Agent': 'Mozilla/5.0' },
-  })
+  const res = await fetch(
+    'https://news.google.com/rss/search?q=한국+경제&hl=ko&gl=KR&ceid=KR:ko',
+    { headers: { 'User-Agent': 'Mozilla/5.0' } }
+  )
   const xml = await res.text()
-  const titles = [...xml.matchAll(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/g)]
-    .slice(1, 4)  // 첫 번째는 피드 제목
+  return [...xml.matchAll(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/g)]
+    .slice(1, 4)
     .map(m => m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim())
-  return titles
 }
 
 // ── 이메일 HTML ───────────────────────────────────────────────────────────────
@@ -132,21 +111,28 @@ function skyLabel(cc) {
   return '☁️ 흐림'
 }
 
+function pcpLabel(pty, pcp) {
+  if (pty === 0) return '-'
+  const icon = PTY_ICON[pty] ?? '🌧'
+  return pcp === '강수없음' ? icon : `${icon} ${pcp}mm`
+}
+
 function generateHTML(tomorrow, hours, air, headlines) {
   const dayName = DAYS[tomorrow.dateObj.getDay()] + '요일'
   const dateStr = `${tomorrow.y}년 ${tomorrow.m}월 ${tomorrow.dd}일 (${dayName})`
+
   const temps = hours.map(h => h.temp)
   const minT = Math.min(...temps).toFixed(0)
   const maxT = Math.max(...temps).toFixed(0)
-  const totalGen = hours.reduce((s, h) => s + calcPower(5, h.irr, h.temp), 0).toFixed(1)
+  const maxPop = Math.max(...hours.slice(8, 20).map(h => h.pop))
 
-  const timeRows = hours.slice(6, 20).map(h => `
+  // 08:00 ~ 23:00
+  const timeRows = hours.slice(8, 24).map(h => `
     <tr>
       <td style="padding:8px 14px;color:#555">${String(h.hour).padStart(2,'0')}:00</td>
       <td style="padding:8px 14px">${skyLabel(h.cloudCover)}</td>
       <td style="padding:8px 14px">${h.temp.toFixed(0)}°C</td>
-      <td style="padding:8px 14px;text-align:right">${h.irr} W/m²</td>
-      <td style="padding:8px 14px;text-align:right">${calcPower(5, h.irr, h.temp).toFixed(2)} kWh</td>
+      <td style="padding:8px 14px;text-align:right">${pcpLabel(h.pty, h.pcp)}</td>
     </tr>`).join('')
 
   const airSection = air ? `
@@ -162,15 +148,14 @@ function generateHTML(tomorrow, hours, air, headlines) {
   </div>` : ''
 
   const newsItems = headlines.map((h, i) =>
-    `<div style="padding:8px 0;${i < headlines.length - 1 ? 'border-bottom:1px solid #f0f0f0' : ''}">
-      <span style="color:#888;font-size:12px;margin-right:8px">${i + 1}</span>${h}
+    `<div style="padding:7px 0;${i < headlines.length - 1 ? 'border-bottom:1px solid #f0f0f0' : ''}">
+      <span style="color:#bbb;margin-right:8px">${i + 1}</span>${h}
     </div>`
   ).join('')
 
   const newsSection = headlines.length > 0 ? `
-  <div style="padding:14px 16px;border-top:1px solid #eee">
-    <div style="font-size:11px;color:#888;font-weight:600;margin-bottom:8px;text-transform:uppercase">오늘의 주요 뉴스</div>
-    <div style="font-size:13px;line-height:1.6;color:#333">${newsItems}</div>
+  <div style="padding:12px 16px;border-top:1px solid #eee;font-size:13px;line-height:1.6;color:#333">
+    ${newsItems}
   </div>` : ''
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -199,18 +184,18 @@ function generateHTML(tomorrow, hours, air, headlines) {
   </div>
   <div class="summary">
     <div class="stat"><div class="stat-val">${minT}°~${maxT}°C</div><div class="stat-lbl">기온 범위</div></div>
-    <div class="stat"><div class="stat-val">${totalGen} kWh</div><div class="stat-lbl">발전량 (5 kW)</div></div>
     <div class="stat"><div class="stat-val">${skyLabel(hours.slice(10,15).reduce((s,h)=>s+h.cloudCover,0)/5)}</div><div class="stat-lbl">낮 날씨</div></div>
+    <div class="stat"><div class="stat-val">${maxPop}%</div><div class="stat-lbl">최대 강수확률</div></div>
   </div>
   ${airSection}
   <table>
     <thead><tr>
-      <th>시각</th><th>날씨</th><th>기온</th><th style="text-align:right">일사량</th><th style="text-align:right">발전량</th>
+      <th>시각</th><th>날씨</th><th>기온</th><th style="text-align:right">강수</th>
     </tr></thead>
     <tbody>${timeRows}</tbody>
   </table>
   ${newsSection}
-  <div class="ftr">기상청 단기예보 · 에어코리아 · Google News 기반</div>
+  <div class="ftr">기상청 단기예보 · 에어코리아 · Google News</div>
 </div>
 </body></html>`
 }
@@ -218,7 +203,7 @@ function generateHTML(tomorrow, hours, air, headlines) {
 // ── Vercel Cron 핸들러 (vercel.json: "0 12 * * *" = KST 21:00) ──────────────
 export const config = { maxDuration: 60 }
 
-export default async function handler(req, res) {
+export default async function handler(_req, res) {
   if (!process.env.KMA_SERVICE_KEY)    return res.status(500).json({ error: 'KMA_SERVICE_KEY 미설정' })
   if (!process.env.GMAIL_USER)         return res.status(500).json({ error: 'GMAIL_USER 미설정' })
   if (!process.env.GMAIL_APP_PASSWORD) return res.status(500).json({ error: 'GMAIL_APP_PASSWORD 미설정' })
@@ -228,7 +213,7 @@ export default async function handler(req, res) {
 
   const [hours, air, headlines] = await Promise.all([
     fetchForecast(LOCATION, today.ymd, tomorrow),
-    fetchAirQuality(tomorrow.isoDate).catch(() => null),
+    fetchAirQuality(today.isoDate).catch(() => null),
     fetchNews().catch(() => []),
   ])
 
