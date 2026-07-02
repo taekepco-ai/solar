@@ -1,6 +1,6 @@
 import { CO2_KG_PER_KWH, KRW_PER_KWH } from '../constants'
 
-function Stat({ label, value, unit, accent }) {
+function Stat({ label, value, unit, desc, accent }) {
   return (
     <div className={`rounded-xl border p-4 bg-gradient-to-br ${accent}`}>
       <p className="text-xs text-slate-400">{label}</p>
@@ -8,6 +8,7 @@ function Stat({ label, value, unit, accent }) {
         {value}
         <span className="ml-1 text-sm font-normal text-slate-400">{unit}</span>
       </p>
+      {desc && <p className="mt-1 text-xs text-slate-500">{desc}</p>}
     </div>
   )
 }
@@ -18,6 +19,7 @@ export default function PowerSummary({ powerData, isDemoData }) {
   const totalKwh = powerData.reduce((s, p) => s + p, 0)
   const peakKw = Math.max(...powerData)
   const co2 = totalKwh * CO2_KG_PER_KWH
+  const trees = Math.round(co2 / 0.55)  // 소나무 월 흡수량 0.55 kg
   const krw = Math.round(totalKwh * KRW_PER_KWH)
 
   return (
@@ -47,6 +49,7 @@ export default function PowerSummary({ powerData, isDemoData }) {
           label="CO₂ 절감"
           value={co2.toFixed(1)}
           unit="kg"
+          desc={`🌲 나무 ${trees}그루 한 달 흡수량`}
           accent="from-green-500/10 to-green-700/5 border-green-500/20"
         />
         <Stat
