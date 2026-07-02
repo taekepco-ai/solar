@@ -4,8 +4,8 @@ export default function Header() {
       <div className="mx-auto max-w-7xl px-4 py-3 flex items-center gap-3">
         <span className="text-2xl">☀️</span>
         <div>
-          <h1 className="text-base font-bold text-white leading-none">태양광 발전 시뮬레이터</h1>
-          <p className="text-xs text-slate-400 mt-0.5">기상 데이터로 배우는 태양 에너지 원리</p>
+          <h1 className="text-base font-bold text-white leading-none">햇빛의 가치</h1>
+          <p className="text-xs text-slate-400 mt-0.5">기상데이터로 배우는 태양광 에너지의 가치</p>
         </div>
       </div>
     </header>
