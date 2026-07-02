@@ -5,6 +5,7 @@ import WeatherCards from './components/WeatherCards'
 import HourlyChart from './components/HourlyChart'
 import PanelConfigurator from './components/PanelConfigurator'
 import PowerSummary from './components/PowerSummary'
+import ValueBanner from './components/ValueBanner'
 import { useWeatherData } from './hooks/useWeatherData'
 import { LOCATIONS } from './constants'
 import { calcPower } from './utils/solar'
@@ -50,6 +51,7 @@ export default function App() {
           </div>
         ) : (
           <>
+            <ValueBanner powerData={powerData} />
             <WeatherCards data={data} hour={selectedHour} />
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
