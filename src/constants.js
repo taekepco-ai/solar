@@ -20,3 +20,4 @@ export const KW_OPTIONS = [
 ]
 
 export const CO2_KG_PER_KWH = 0.459
+export const KRW_PER_KWH = 130  // 한전 주택용 평균 단가 (원/kWh)

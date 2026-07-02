@@ -1,4 +1,4 @@
-import { CO2_KG_PER_KWH } from '../constants'
+import { CO2_KG_PER_KWH, KRW_PER_KWH } from '../constants'
 
 function Stat({ label, value, unit, accent }) {
   return (
@@ -18,8 +18,7 @@ export default function PowerSummary({ powerData, isDemoData }) {
   const totalKwh = powerData.reduce((s, p) => s + p, 0)
   const peakKw = Math.max(...powerData)
   const co2 = totalKwh * CO2_KG_PER_KWH
-  // 성인 하루 평균 전력 소비 ~10 kWh (가구 기준)
-  const households = totalKwh / 10
+  const krw = Math.round(totalKwh * KRW_PER_KWH)
 
   return (
     <div className="rounded-xl bg-slate-800/50 p-4">
@@ -51,9 +50,9 @@ export default function PowerSummary({ powerData, isDemoData }) {
           accent="from-green-500/10 to-green-700/5 border-green-500/20"
         />
         <Stat
-          label="공급 가능 가구"
-          value={households.toFixed(1)}
-          unit="가구"
+          label="전기요금 절감"
+          value={krw.toLocaleString('ko-KR')}
+          unit="원"
           accent="from-violet-500/10 to-violet-700/5 border-violet-500/20"
         />
       </div>
